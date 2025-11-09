@@ -1,0 +1,1 @@
+llamafactory-cli chat examples/inference/qwen3_lora_sft.yaml

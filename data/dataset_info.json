@@ -2,6 +2,9 @@
   "identity": {
     "file_name": "identity.json"
   },
+  "risk_action_list": {
+    "file_name": "processed_data/risk_action_list.json"
+    },
   "alpaca_en_demo": {
     "file_name": "alpaca_en_demo.json"
   },
