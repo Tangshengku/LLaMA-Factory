@@ -16,6 +16,8 @@ import os
 import subprocess
 import sys
 from copy import deepcopy
+from unsloth import FastLanguageModel
+import unsloth
 
 
 USAGE = (

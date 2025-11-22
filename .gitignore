@@ -179,3 +179,6 @@ generated_predictions.jsonl
 predictions_score.json
 original_data
 processed_data
+reports/
+test.py
+unsloth_compiled_cache/
