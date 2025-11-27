@@ -5,6 +5,54 @@
   "risk_action_list": {
     "file_name": "processed_data/risk_action_list.json"
     },
+  "chemical_device": {
+    "file_name": "chemi_data_processed/devices_chinese_20pct.jsonl",
+    "columns": {
+      "prompt": "text"
+    }
+    },
+  "production_process": {
+    "file_name": "chemi_data_processed/production_process_chinese_20pct.jsonl",
+    "columns": {
+      "prompt": "text"
+    }
+    },
+  "safety_checklist": {
+    "file_name": "chemi_data_processed/safety_checklist_chinese_20pct.jsonl",
+    "columns": {
+      "prompt": "text"
+    }
+    },
+  "SDS": {
+    "file_name": "chemi_data_processed/SDS_chinese_20pct.jsonl",
+    "columns": {
+      "prompt": "text"
+    }
+    },
+    "law_first": {
+    "file_name": "chemi_data_processed/laws_first_part_chinese_20pct.jsonl",
+    "columns": {
+      "prompt": "text"
+    }
+    },
+    "law_second": {
+    "file_name": "chemi_data_processed/laws_2nd_part_chinese_20pct.jsonl",
+    "columns": {
+      "prompt": "text"
+    }
+    },
+    "law_third": {
+    "file_name": "chemi_data_processed/laws_3rd_part_chinese_20pct.jsonl",
+    "columns": {
+      "prompt": "text"
+    }
+    },
+    "standard": {
+    "file_name": "chemi_data_processed/standard_chinese_20pct.jsonl",
+    "columns": {
+      "prompt": "text"
+    }
+    },
   "alpaca_en_demo": {
     "file_name": "alpaca_en_demo.json"
   },

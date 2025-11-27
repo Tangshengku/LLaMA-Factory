@@ -1,5 +1,5 @@
 model_name_or_path: Qwen/Qwen3-4B-Instruct-2507
-adapter_name_or_path: /home/shengkun/LLaMA-Factory/saves/qwen3_4b-ins/lora/risk_action_list
+adapter_name_or_path: /nfs/scistore19/alistgrp/stang/LLaMA-Factory/saves/qwen3_4b-ins/lora/risk_action_list/checkpoint-252
 template: qwen3
 infer_backend: huggingface  # choices: [huggingface, vllm, sglang]
 trust_remote_code: true

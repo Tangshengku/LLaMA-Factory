@@ -1,0 +1,5 @@
+model_name_or_path: Qwen/Qwen3-14B
+adapter_name_or_path: /nfs/scistore19/alistgrp/stang/LLaMA-Factory/saves/qwen3-14B-finetune
+template: qwen3
+infer_backend: huggingface  # choices: [huggingface, vllm, sglang]
+trust_remote_code: true

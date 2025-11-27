@@ -182,3 +182,6 @@ processed_data
 reports/
 test.py
 unsloth_compiled_cache/
+chemi_data_compressed/
+chemi_data/
+data/
