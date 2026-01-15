@@ -2,12 +2,10 @@ import os
 import json
 import re
 import subprocess
-from cnocr import CnOcr
+import platform
 from PIL import Image, ImageEnhance, ImageFilter
+import pytesseract
 
-
-# 初始化 OCR 引擎
-ocr = CnOcr(det_model_name="ch_PP-OCRv5_det", rec_model_name="ch_PP-OCRv5")
 
 def extract_text_from_doc(doc_path):
     """
@@ -15,7 +13,6 @@ def extract_text_from_doc(doc_path):
     尝试使用 antiword (Linux/macOS) 或 pywin32 (Windows)
     修正 antiword 输出混入问题，并移除 BOM
     """
-    import platform
     system = platform.system()
 
     if system == "Windows":
@@ -75,6 +72,7 @@ def extract_text_from_doc(doc_path):
         print(f"❌ 不支持的操作系统: {system}，无法处理 .doc 文件")
         return ""
 
+
 def extract_text_from_docx(docx_path):
     """
     使用 python-docx 处理 .docx 文件
@@ -96,15 +94,18 @@ def extract_text_from_docx(docx_path):
         print(f"❌ 提取 DOCX 文件失败: {docx_path}, 错误: {e}")
         return ""
 
+
 def extract_text_from_pdf(pdf_path):
     """
     从 PDF 文件中提取文本。
-    首先尝试 pdfplumber (适用于文字型 PDF)。
-    如果失败或文本很少，则回退到 PyMuPDF + CnOCR (适用于扫描版 PDF)。
+    1. 首先尝试 pdfplumber (适用于文字型 PDF)。
+    2. 如果失败或文本很少，则回退到 PyMuPDF + Tesseract OCR (适用于扫描版 PDF)。
     """
     print(f"  - 开始处理 PDF: {pdf_path}")
-    
-    # --- 尝试使用 pdfplumber 提取文本 ---
+
+    extracted_text = ""
+
+    # --- Step 1: 尝试使用 pdfplumber 提取文本 ---
     try:
         import pdfplumber
         text_lines = []
@@ -115,73 +116,77 @@ def extract_text_from_pdf(pdf_path):
                 if text:
                     text_lines.append(text)
                     print(f"      - 从第 {page_num+1} 页提取到 {len(text)} 个字符。")
-        
+
         extracted_text = "\n".join(text_lines).strip()
         print(f"    - pdfplumber 提取完成，总字符数: {len(extracted_text)}")
-        
-        if len(extracted_text) > 20: 
+
+        # 如果提取到的文本已经足够，就直接使用它
+        if len(extracted_text) > 20:
             print(f"    - 使用 pdfplumber 提取的文本，长度: {len(extracted_text)}")
-            # 移除 BOM
             return extracted_text.lstrip('\ufeff')
         else:
-            print(f"    - pdfplumber 提取的文本过少或为空，尝试 OCR...")
-            return ""
-            # 继续执行 OCR 分支
+            print(f"    - pdfplumber 提取的文本过少或为空，准备尝试 OCR...")
+            # 不 return，继续走 OCR 分支
+
     except ImportError:
         print(f"    - 未安装 pdfplumber，跳过文字提取，直接尝试 OCR: pip install pdfplumber")
     except Exception as e:
         print(f"    - pdfplumber 处理 PDF 失败: {e}")
         # 继续执行 OCR 分支
-        return ""
 
-
-    # --- 回退到 PyMuPDF + CnOCR ---
+    # --- Step 2: 回退到 PyMuPDF + Tesseract OCR ---
     try:
         import fitz  # PyMuPDF
+        import io
+
         doc = fitz.open(pdf_path)
         text_lines = []
-        print(f"    - 使用 PyMuPDF + CnOCR 处理 PDF，共 {doc.page_count} 页")
+        print(f"    - 使用 PyMuPDF + Tesseract OCR 处理 PDF，共 {doc.page_count} 页")
+
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
-            pix = page.get_pixmap(dpi=200)  # 降低 DPI
+            pix = page.get_pixmap(dpi=200)  # dpi 可视情况调整
+
             img_data = pix.tobytes("png")
-            
             if not img_data or len(img_data) == 0:
                 print(f"      - 警告: 第 {page_num+1} 页渲染为空图片，跳过。")
                 continue
-            
-            from PIL import Image
-            import io
+
             try:
                 image = Image.open(io.BytesIO(img_data))
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
 
-                ocr_result = ocr.ocr(image)
-                if not ocr_result:
+                # 简单预处理，可按需增强
+                # image = image.convert('L')  # 灰度
+                # image = ImageEnhance.Contrast(image).enhance(1.5)
+
+                # 使用 Tesseract OCR，中文+英文
+                page_text = pytesseract.image_to_string(image, lang="chi_sim+eng")
+                page_text = page_text.strip()
+                if not page_text:
                     print(f"      - 警告: 第 {page_num+1} 页 OCR 结果为空。")
                     continue
-                
-                page_texts = [item[1] for item in ocr_result if item and len(item) > 1 and item[1]]
-                text_lines.extend(page_texts)
-                print(f"      - 第 {page_num+1} 页 OCR 完成，提取到 {len(page_texts)} 个文本块。")
-            
+
+                text_lines.append(page_text)
+                print(f"      - 第 {page_num+1} 页 OCR 完成，提取到 {len(page_text)} 个字符。")
+
             except Exception as img_e:
                 print(f"      - 处理第 {page_num+1} 页图片时出错: {img_e}")
                 continue
-        
+
         doc.close()
         final_text = "\n".join(text_lines).strip()
         print(f"    - OCR 提取完成，总字符数: {len(final_text)}")
-        # 移除 BOM
         return final_text.lstrip('\ufeff')
-        
+
     except ImportError:
         print(f"❌ 需要安装 PyMuPDF (fitz) 来处理 PDF: pip install PyMuPDF")
         return ""
     except Exception as e:
-        print(f"❌ OCR 识别 PDF 失败: {pdf_path}, 错误: {e}")
-        return "" 
+        print(f"❌ 使用 Tesseract OCR 识别 PDF 失败: {pdf_path}, 错误: {e}")
+        return ""
+
 
 def split_text_by_length(text, max_len=2048):
     """将长文本按最大长度拆分为多个片段"""
@@ -204,6 +209,7 @@ def split_text_by_length(text, max_len=2048):
         start = end
     return chunks
 
+
 def process_directory(root_dir, output_jsonl_path="output.jsonl"):
     """遍历目录，处理所有 doc 和 pdf 文件"""
     with open(output_jsonl_path, 'w', encoding='utf-8') as f_out:
@@ -211,7 +217,7 @@ def process_directory(root_dir, output_jsonl_path="output.jsonl"):
             for filename in filenames:
                 filepath = os.path.join(dirpath, filename)
                 text = ""
-                
+
                 if filename.lower().endswith('.doc'):
                     print(f"📄 正在处理旧版 DOC 文件: {filepath}")
                     text = extract_text_from_doc(filepath)
@@ -235,9 +241,10 @@ def process_directory(root_dir, output_jsonl_path="output.jsonl"):
 
     print(f"🎉 所有文件处理完成，结果已保存至: {output_jsonl_path}")
 
+
 if __name__ == "__main__":
-    ROOT_DIR = "/nfs/scistore19/alistgrp/stang/LLaMA-Factory/data/chemi_data_uncompressed/law/法律法规-03"
-    OUTPUT_FILE = "laws_3rd_part.jsonl"
+    ROOT_DIR = "xxxx/data/chemi_data_uncompressed/8.事故案例"
+    OUTPUT_FILE = "case_tess.jsonl"
 
     if not os.path.exists(ROOT_DIR):
         print(f"❌ 目录不存在: {ROOT_DIR}")

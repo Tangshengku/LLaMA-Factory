@@ -1,0 +1,6 @@
+model_name_or_path: Qwen/Qwen3-32B
+quantization_bit: 8
+adapter_name_or_path: xxx
+template: qwen3
+infer_backend: huggingface  # choices: [huggingface, vllm, sglang]
+trust_remote_code: true
