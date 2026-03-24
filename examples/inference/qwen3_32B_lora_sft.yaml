@@ -1,6 +1,5 @@
-model_name_or_path: Qwen/Qwen3-32B
-quantization_bit: 8
-adapter_name_or_path: xxx
+model_name_or_path: /home/tsk/LLaMA-Factory/output/qwen3_32b_8bit
+adapter_name_or_path: /root/.cache/modelscope/hub/models/BrysonTang/32B-adaptor
 template: qwen3
 infer_backend: huggingface  # choices: [huggingface, vllm, sglang]
 trust_remote_code: true

@@ -1,0 +1,15 @@
+### Note: DO NOT use quantized model or quantization_bit when merging lora adapters
+
+### model
+model_name_or_path: /home/tsk/LLaMA-Factory/output/qwen3_32b_chemi
+template: qwen3
+trust_remote_code: true
+
+### export
+export_dir: output/qwen3_32b_chemi_8bit
+export_size: 5
+export_quantization_bit: 8
+quantization_method: bitsandbytes
+export_quantization_dataset: ./data/c4_demo.jsonl
+export_device: gpu  # choices: [cpu, auto]
+export_legacy_format: false
