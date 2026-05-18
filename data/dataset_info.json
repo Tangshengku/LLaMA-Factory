@@ -701,6 +701,13 @@
       "prompt": "text"
     }
   },
+  "fineweb_edu_10bt": {
+    "hf_hub_url": "HuggingFaceFW/fineweb-edu",
+    "subset": "sample-10BT",
+    "columns": {
+      "prompt": "text"
+    }
+  },
   "cci3_hq": {
     "hf_hub_url": "BAAI/CCI3-HQ",
     "columns": {
