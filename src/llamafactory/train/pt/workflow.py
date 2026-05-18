@@ -23,7 +23,7 @@ from transformers import DataCollatorForLanguageModeling
 from ...data import get_dataset, get_template_and_fix_tokenizer
 from ...extras.ploting import plot_loss
 from ...model import load_model, load_tokenizer
-from ..trainer_utils import create_modelcard_and_push
+from ..trainer_utils import create_kd_teacher_model, create_modelcard_and_push
 from .trainer import CustomTrainer
 
 
@@ -45,6 +45,7 @@ def run_pt(
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
     dataset_module = get_dataset(template, model_args, data_args, training_args, stage="pt", **tokenizer_module)
     model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train)
+    kd_teacher_model = create_kd_teacher_model(model_args, finetuning_args)
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     # Initialize our Trainer
@@ -54,6 +55,7 @@ def run_pt(
         finetuning_args=finetuning_args,
         data_collator=data_collator,
         callbacks=callbacks,
+        kd_teacher_model=kd_teacher_model,
         **dataset_module,
         **tokenizer_module,
     )

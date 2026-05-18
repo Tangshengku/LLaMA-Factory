@@ -21,7 +21,12 @@ from typing_extensions import override
 
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
-from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
+from ..trainer_utils import (
+    compute_slimqwen_kd_loss,
+    create_custom_optimizer,
+    create_custom_scheduler,
+    prepare_model_for_reference,
+)
 
 
 if TYPE_CHECKING:
@@ -38,6 +43,7 @@ class CustomTrainer(Trainer):
         finetuning_args: "FinetuningArguments",
         processor: Optional["ProcessorMixin"],
         model_args: Optional["ModelArguments"] = None,
+        kd_teacher_model: Optional["torch.nn.Module"] = None,
         **kwargs,
     ) -> None:
         kwargs["processing_class"] = kwargs.pop("tokenizer")
@@ -55,6 +61,10 @@ class CustomTrainer(Trainer):
             self.model_accepts_loss_kwargs = False
 
         self.finetuning_args = finetuning_args
+        self.kd_teacher_model = kd_teacher_model
+
+        if kd_teacher_model is not None:
+            self.kd_teacher_model = prepare_model_for_reference(self.kd_teacher_model, self.accelerator)
 
         if processor is not None:
             self.add_callback(SaveProcessorCallback(processor))
@@ -90,4 +100,23 @@ class CustomTrainer(Trainer):
 
     @override
     def compute_loss(self, model, inputs, *args, **kwargs):
+        if self.finetuning_args.use_kd_loss:
+            return_outputs = kwargs.get("return_outputs", False)
+            num_items_in_batch = kwargs.get("num_items_in_batch", None)
+            if len(args) >= 1 and isinstance(args[0], bool):
+                return_outputs = args[0]
+            if len(args) >= 2:
+                num_items_in_batch = args[1]
+
+            loss, outputs = compute_slimqwen_kd_loss(
+                model=model,
+                teacher_model=self.kd_teacher_model,
+                inputs=inputs,
+                finetuning_args=self.finetuning_args,
+                trainer_state=self.state,
+                training_args=self.args,
+                num_items_in_batch=num_items_in_batch,
+            )
+            return (loss, outputs) if return_outputs else loss
+
         return super().compute_loss(model, inputs, *args, **kwargs)

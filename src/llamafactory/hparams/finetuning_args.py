@@ -260,6 +260,40 @@ class RLHFArguments:
 
 
 @dataclass
+class KDArguments:
+    r"""Arguments pertaining to SlimQwen-style knowledge distillation."""
+
+    use_kd_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use SlimQwen-style LM and next-token KD mixed loss."},
+    )
+    kd_teacher_model: str | None = field(
+        default=None,
+        metadata={"help": "Path to the teacher model used for KD training."},
+    )
+    kd_teacher_adapters: str | None = field(
+        default=None,
+        metadata={"help": "Path to the adapters of the teacher model used for KD training."},
+    )
+    kd_teacher_quantization_bit: int | None = field(
+        default=None,
+        metadata={"help": "The number of bits to quantize the teacher model for KD training."},
+    )
+    kd_lambda: float = field(
+        default=1.0,
+        metadata={"help": "Initial KD loss weight lambda in (1 - lambda) * LM + lambda * KD."},
+    )
+    kd_lambda_final: float | None = field(
+        default=None,
+        metadata={"help": "Final KD loss weight lambda after linear decay. Defaults to kd_lambda."},
+    )
+    kd_temperature: float = field(
+        default=1.0,
+        metadata={"help": "Temperature for the teacher and student distributions in KD loss."},
+    )
+
+
+@dataclass
 class GaloreArguments:
     r"""Arguments pertaining to the GaLore algorithm."""
 
@@ -446,6 +480,7 @@ class FinetuningArguments(
     BAdamArgument,
     ApolloArguments,
     GaloreArguments,
+    KDArguments,
     RLHFArguments,
     LoraArguments,
     OFTArguments,
@@ -571,11 +606,35 @@ class FinetuningArguments(
         self.additional_target: list[str] | None = split_arg(self.additional_target)
         self.galore_target: list[str] = split_arg(self.galore_target)
         self.apollo_target: list[str] = split_arg(self.apollo_target)
+        self.kd_lambda_final = self.kd_lambda if self.kd_lambda_final is None else self.kd_lambda_final
         self.use_ref_model = self.stage == "dpo" and self.pref_loss not in ["orpo", "simpo"]
 
         assert self.finetuning_type in ["lora", "oft", "freeze", "full"], "Invalid fine-tuning method."
         assert self.ref_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
         assert self.reward_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
+        assert self.kd_teacher_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
+
+        if self.kd_lambda < 0.0 or self.kd_lambda > 1.0:
+            raise ValueError("`kd_lambda` must be in the range [0, 1].")
+
+        if self.kd_lambda_final < 0.0 or self.kd_lambda_final > 1.0:
+            raise ValueError("`kd_lambda_final` must be in the range [0, 1].")
+
+        if self.kd_temperature <= 0.0:
+            raise ValueError("`kd_temperature` must be greater than 0.")
+
+        if self.use_kd_loss:
+            if self.stage not in ["pt", "sft"]:
+                raise ValueError("`use_kd_loss` is only supported for the PT and SFT stages.")
+
+            if self.kd_teacher_model is None:
+                raise ValueError("`kd_teacher_model` is necessary when `use_kd_loss` is enabled.")
+
+            if self.use_dft_loss or self.use_asft_loss or self.use_eaft_loss:
+                raise ValueError("`use_kd_loss` cannot be used with DFT, ASFT, or EAFT custom losses.")
+
+            if self.use_hyper_parallel:
+                raise ValueError("`use_kd_loss` is not supported with `use_hyper_parallel` yet.")
 
         if self.stage == "ppo" and self.reward_model is None:
             raise ValueError("`reward_model` is necessary for PPO training.")

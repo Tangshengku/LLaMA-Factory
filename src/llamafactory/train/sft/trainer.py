@@ -30,7 +30,12 @@ from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
-from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
+from ..trainer_utils import (
+    compute_slimqwen_kd_loss,
+    create_custom_optimizer,
+    create_custom_scheduler,
+    prepare_model_for_reference,
+)
 
 
 if TYPE_CHECKING:
@@ -54,6 +59,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         model_args: Optional["ModelArguments"] = None,
         gen_kwargs: Optional[dict[str, Any]] = None,
         ref_model: Optional["torch.nn.Module"] = None,
+        kd_teacher_model: Optional["torch.nn.Module"] = None,
         **kwargs,
     ) -> None:
         kwargs["processing_class"] = kwargs.pop("tokenizer")
@@ -87,23 +93,12 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         self.ref_model = ref_model
 
         if ref_model is not None:
-            from trl.models.utils import prepare_deepspeed, prepare_fsdp
+            self.ref_model = prepare_model_for_reference(self.ref_model, self.accelerator)
 
-            if getattr(self.accelerator.state, "deepspeed_plugin", None) is not None:
-                if not (
-                    getattr(ref_model, "is_loaded_in_8bit", False) or getattr(ref_model, "is_loaded_in_4bit", False)
-                ):  # quantized models are already set on the correct device
-                    self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
-            elif getattr(self.accelerator.state, "fsdp_plugin", None) is not None:
-                if self.accelerator.is_fsdp2:
-                    from accelerate.utils.fsdp_utils import fsdp2_prepare_model
+        self.kd_teacher_model = kd_teacher_model
 
-                    self.ref_model = fsdp2_prepare_model(self.accelerator, self.ref_model)
-                else:
-                    self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
-            else:
-                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-                self.ref_model.eval()
+        if kd_teacher_model is not None:
+            self.kd_teacher_model = prepare_model_for_reference(self.kd_teacher_model, self.accelerator)
 
         if finetuning_args.use_dft_loss:
             from ..trainer_utils import dft_loss_func
@@ -149,6 +144,25 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
 
     @override
     def compute_loss(self, model, inputs, *args, **kwargs):
+        if self.finetuning_args.use_kd_loss:
+            return_outputs = kwargs.get("return_outputs", False)
+            num_items_in_batch = kwargs.get("num_items_in_batch", None)
+            if len(args) >= 1 and isinstance(args[0], bool):
+                return_outputs = args[0]
+            if len(args) >= 2:
+                num_items_in_batch = args[1]
+
+            loss, outputs = compute_slimqwen_kd_loss(
+                model=model,
+                teacher_model=self.kd_teacher_model,
+                inputs=inputs,
+                finetuning_args=self.finetuning_args,
+                trainer_state=self.state,
+                training_args=self.args,
+                num_items_in_batch=num_items_in_batch,
+            )
+            return (loss, outputs) if return_outputs else loss
+
         if self.finetuning_args.use_asft_loss:
             with torch.no_grad():
                 ref_outputs = self.ref_model(

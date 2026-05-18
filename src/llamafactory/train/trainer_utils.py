@@ -148,6 +148,47 @@ def create_ref_model(
     return ref_model
 
 
+def create_kd_teacher_model(
+    model_args: "ModelArguments", finetuning_args: "FinetuningArguments"
+) -> Optional["PreTrainedModel"]:
+    r"""Create the teacher model for SlimQwen-style KD training."""
+    if not finetuning_args.use_kd_loss:
+        return None
+
+    teacher_model_args = ModelArguments.copyfrom(
+        model_args,
+        model_name_or_path=finetuning_args.kd_teacher_model,
+        adapter_name_or_path=finetuning_args.kd_teacher_adapters,
+        quantization_bit=finetuning_args.kd_teacher_quantization_bit,
+    )
+    teacher_finetuning_args = FinetuningArguments()
+    tokenizer = load_tokenizer(teacher_model_args)["tokenizer"]
+    teacher_model = load_model(tokenizer, teacher_model_args, teacher_finetuning_args, is_trainable=False)
+    logger.info_rank0(f"Created KD teacher model from {finetuning_args.kd_teacher_model}.")
+    return teacher_model
+
+
+def prepare_model_for_reference(model: "PreTrainedModel", accelerator: Any) -> "PreTrainedModel":
+    r"""Prepare a non-trainable model for reference logits under the active accelerator plugin."""
+    from trl.models.utils import prepare_deepspeed, prepare_fsdp
+
+    if getattr(accelerator.state, "deepspeed_plugin", None) is not None:
+        if not (getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False)):
+            model = prepare_deepspeed(model, accelerator)
+    elif getattr(accelerator.state, "fsdp_plugin", None) is not None:
+        if accelerator.is_fsdp2:
+            from accelerate.utils.fsdp_utils import fsdp2_prepare_model
+
+            model = fsdp2_prepare_model(accelerator, model)
+        else:
+            model = prepare_fsdp(model, accelerator)
+    else:
+        model = accelerator.prepare_model(model, evaluation_mode=True)
+
+    model.eval()
+    return model
+
+
 def create_reward_model(
     model: "AutoModelForCausalLMWithValueHead", model_args: "ModelArguments", finetuning_args: "FinetuningArguments"
 ) -> Optional["AutoModelForCausalLMWithValueHead"]:
@@ -634,6 +675,122 @@ def get_batch_logps(
         logps = (per_token_logps * loss_mask).sum(-1)
 
     return logps, valid_length
+
+
+def get_current_kd_lambda(
+    finetuning_args: "FinetuningArguments",
+    trainer_state: "TrainerState",
+    training_args: "TrainingArguments",
+) -> float:
+    r"""Return linearly scheduled KD weight for the current trainer step."""
+    start = float(finetuning_args.kd_lambda)
+    end = float(finetuning_args.kd_lambda_final)
+    if start == end:
+        return start
+
+    max_steps = getattr(trainer_state, "max_steps", 0) or getattr(training_args, "max_steps", 0) or 1
+    progress = min(max(float(getattr(trainer_state, "global_step", 0)) / max(float(max_steps), 1.0), 0.0), 1.0)
+    return start + (end - start) * progress
+
+
+def _masked_token_mean(
+    per_token_loss: "torch.Tensor",
+    valid_mask: "torch.Tensor",
+    num_items_in_batch: Optional["torch.Tensor"] = None,
+) -> "torch.Tensor":
+    if not valid_mask.any():
+        return torch.tensor(0.0, device=per_token_loss.device, dtype=per_token_loss.dtype)
+
+    valid_mask = valid_mask.to(per_token_loss.dtype)
+    loss_sum = (per_token_loss * valid_mask).sum()
+    if num_items_in_batch is not None:
+        if torch.is_tensor(num_items_in_batch):
+            num_items_in_batch = num_items_in_batch.to(loss_sum.device)
+
+        return loss_sum / num_items_in_batch
+
+    return loss_sum / valid_mask.sum()
+
+
+def slimqwen_kd_loss_func(
+    outputs: "torch.Tensor",
+    labels: "torch.Tensor",
+    teacher_logits: "torch.Tensor",
+    kd_lambda: float,
+    kd_temperature: float = 1.0,
+    num_items_in_batch: Optional["torch.Tensor"] = None,
+    ignore_index: int = IGNORE_INDEX,
+) -> "torch.Tensor":
+    r"""Compute SlimQwen Eq. 12 without MTP: (1 - lambda) * LM + lambda * KD."""
+    logits = outputs.get("logits")
+    if logits is None:
+        return outputs.get("loss", torch.tensor(0.0))
+
+    logits = logits[..., :-1, :].contiguous().float()
+    teacher_logits = teacher_logits[..., :-1, :].contiguous().to(logits.device).float()
+    labels = labels[..., 1:].contiguous().to(logits.device)
+
+    vocab_size = logits.size(-1)
+    if teacher_logits.size(-1) != vocab_size:
+        raise ValueError(
+            f"Student and teacher vocab sizes must match for KD, got {vocab_size} and {teacher_logits.size(-1)}."
+        )
+
+    logits = logits.view(-1, vocab_size)
+    teacher_logits = teacher_logits.view(-1, vocab_size)
+    labels = labels.view(-1)
+    valid_mask = labels != ignore_index
+
+    lm_per_token = F.cross_entropy(logits, labels, ignore_index=ignore_index, reduction="none")
+    lm_loss = _masked_token_mean(lm_per_token, valid_mask, num_items_in_batch)
+
+    if not valid_mask.any():
+        kd_loss = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
+    else:
+        temperature = float(kd_temperature)
+        valid_student_logits = logits[valid_mask] / temperature
+        valid_teacher_logits = teacher_logits[valid_mask] / temperature
+        teacher_probs = F.softmax(valid_teacher_logits, dim=-1)
+        student_log_probs = F.log_softmax(valid_student_logits, dim=-1)
+        kd_per_token = -(teacher_probs * student_log_probs).sum(dim=-1) * (temperature**2)
+        kd_loss = _masked_token_mean(kd_per_token, torch.ones_like(kd_per_token, dtype=torch.bool), num_items_in_batch)
+
+    return (1.0 - kd_lambda) * lm_loss + kd_lambda * kd_loss
+
+
+def compute_slimqwen_kd_loss(
+    model: "PreTrainedModel",
+    teacher_model: "PreTrainedModel",
+    inputs: dict[str, "torch.Tensor"],
+    finetuning_args: "FinetuningArguments",
+    trainer_state: "TrainerState",
+    training_args: "TrainingArguments",
+    num_items_in_batch: Optional["torch.Tensor"] = None,
+) -> tuple["torch.Tensor", "torch.Tensor"]:
+    r"""Run the online teacher forward and compute the non-MTP SlimQwen KD objective."""
+    if teacher_model is None:
+        raise ValueError("`kd_teacher_model` must be loaded before KD loss can be computed.")
+
+    labels = inputs.get("labels")
+    if labels is None:
+        raise ValueError("`labels` are required for KD training.")
+
+    teacher_inputs = {key: value for key, value in inputs.items() if key != "labels"}
+    with torch.no_grad():
+        teacher_outputs = teacher_model(**teacher_inputs)
+        teacher_logits = teacher_outputs.logits.detach()
+
+    outputs = model(**inputs)
+    kd_lambda = get_current_kd_lambda(finetuning_args, trainer_state, training_args)
+    loss = slimqwen_kd_loss_func(
+        outputs=outputs,
+        labels=labels,
+        teacher_logits=teacher_logits,
+        kd_lambda=kd_lambda,
+        kd_temperature=finetuning_args.kd_temperature,
+        num_items_in_batch=num_items_in_batch,
+    )
+    return loss, outputs
 
 
 def dft_loss_func(
