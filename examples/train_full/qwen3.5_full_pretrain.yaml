@@ -1,0 +1,57 @@
+### model
+model_name_or_path: /nfs/scistore19/alistgrp/huggingface/hub/shengkun/qwen35-4b-slimqwen-hs-2048-is-8192
+trust_remote_code: true
+
+## KD param
+use_kd_loss: true
+kd_teacher_model: Qwen/Qwen3.5-4B
+kd_lambda: 1.0
+kd_lambda_final: 0.75
+kd_temperature: 1.0
+
+### method
+stage: pt
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_target: all
+# deepspeed: examples/deepspeed/ds_z3_config.json  # choices: [ds_z0_config.json, ds_z2_config.json, ds_z3_config.json]
+
+### dataset
+dataset: fineweb_edu_10bt
+template: qwen3_5_nothink
+cutoff_len: 1024
+max_samples: null
+# preprocessing_num_workers: 16
+dataloader_num_workers: 4
+preprocessing_batch_size: 1000
+streaming: true
+max_steps: 4000
+
+### output
+output_dir: saves/qwen3.5-4b/full/pt
+logging_steps: 10
+save_steps: 1000
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.02
+bf16: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
+
+
+### eval
+# eval_dataset: alpaca_en_demo
+# val_size: 0.1
+# per_device_eval_batch_size: 1
+# eval_strategy: steps
+# eval_steps: 500

@@ -1,0 +1,13 @@
+### Note: DO NOT use quantized model or quantization_bit when merging lora adapters
+
+### model
+model_name_or_path: /nfs/scistore19/alistgrp/huggingface/hub/shengkun/qwen35-4b-slimqwen-hs-2048-is-8192
+adapter_name_or_path: /nfs/scistore19/alistgrp/stang/SlimQwen/external/LLaMA-Factory/saves/qwen3.5-4b/full/pt
+template: qwen3_5_nothink
+trust_remote_code: true
+
+### export
+export_dir: saves/qwen35_pretrain_merged
+export_size: 5
+export_device: auto  # choices: [cpu, auto]
+export_legacy_format: false
